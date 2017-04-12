@@ -143,7 +143,7 @@ public class DataFileAccessor {
         }
     }
 
-    public Location readNextLocationDetails(Location start, final int type) throws ClosedJournalException, IOException {
+    public Location readNextLocationDetails(Location start, final int type) throws IOException {
         // Try with the most immediate subsequent location among inflight writes:
         Location asyncLocation = new Location(start.getDataFileId(), start.getPointer() + 1);
         WriteCommand asyncWrite = journal.getInflightWrites().get(asyncLocation);

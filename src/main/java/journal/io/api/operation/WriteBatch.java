@@ -7,15 +7,11 @@ import journal.io.api.ReplicationTarget;
 import journal.io.api.dao.FileAccessBase;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Iterator;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
-import java.util.zip.Adler32;
-import java.util.zip.Checksum;
 
 import static journal.io.util.LogHelper.warn;
 
@@ -32,12 +28,6 @@ public class WriteBatch {
     private volatile long offset;
     private volatile int pointer;
     private volatile int size;
-
-    WriteBatch() {
-        this.dataFile = null;
-        this.offset = -1;
-        this.pointer = -1;
-    }
 
     WriteBatch(DataFile dataFile, int pointer) throws IOException {
         this.dataFile = dataFile;
@@ -58,11 +48,12 @@ public class WriteBatch {
 
     WriteCommand prepareBatch() throws IOException {
         WriteCommand controlRecord = new WriteCommand(new Location(), EMPTY_BUFFER, false);
-        controlRecord.getLocation().setType(Location.BATCH_CONTROL_RECORD_TYPE);
-        controlRecord.getLocation().setSize(Journal.BATCH_CONTROL_RECORD_SIZE);
-        controlRecord.getLocation().setDataFileId(dataFile.getDataFileId());
-        controlRecord.getLocation().setPointer(pointer);
-        size = controlRecord.getLocation().getSize();
+        Location location = controlRecord.getLocation();
+        location.setType(Location.BATCH_CONTROL_RECORD_TYPE);
+        location.setSize(Journal.BATCH_CONTROL_RECORD_SIZE);
+        location.setDataFileId(dataFile.getDataFileId());
+        location.setPointer(pointer);
+        size = location.getSize();
         dataFile.incrementLength(size);
         writes.offer(controlRecord);
         return controlRecord;
@@ -75,40 +66,14 @@ public class WriteBatch {
     }
 
     Location perform(FileAccessBase file, boolean checksum, boolean physicalSync, ReplicationTarget replicationTarget) throws IOException {
-        ByteBuffer buffer = ByteBuffer.allocate(size);
-        Checksum adler32 = new Adler32();
+
         WriteCommand control = writes.peek();
+        byte[] dataToWrite = file.createDataForWrite(size, writes, checksum);
 
-        // Write an empty batch control record.
-        buffer.putInt(control.getLocation().getPointer());
-        buffer.putInt(Journal.BATCH_CONTROL_RECORD_SIZE);
-        buffer.put(Location.BATCH_CONTROL_RECORD_TYPE);
-        buffer.putLong(0);
-
-        Iterator<WriteCommand> commands = writes.iterator();
-        // Skip the control write:
-        commands.next();
-        // Process others:
-        while (commands.hasNext()) {
-            WriteCommand current = commands.next();
-            buffer.putInt(current.getLocation().getPointer());
-            buffer.putInt(current.getLocation().getSize());
-            buffer.put(current.getLocation().getType());
-            buffer.put(current.getData());
-            if (checksum) {
-                adler32.update(current.getData(), 0, current.getData().length);
-            }
-        }
-
-        // Now we can fill in the batch control record properly.
-        buffer.position(Journal.RECORD_HEADER_SIZE);
-        if (checksum) {
-            buffer.putLong(adler32.getValue());
-        }
 
         // Now do the 1 big write.
         file.seek(offset);
-        file.write(buffer.array());
+        file.write(dataToWrite);
 
         // Then sync:
         if (physicalSync) {
@@ -118,7 +83,7 @@ public class WriteBatch {
         // And replicate:
         try {
             if (replicationTarget != null) {
-                replicationTarget.replicate(control.getLocation(), buffer.array());
+                replicationTarget.replicate(control.getLocation(), dataToWrite);
             }
         } catch (Throwable ex) {
             warn("Cannot replicate!", ex);

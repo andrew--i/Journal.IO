@@ -3,10 +3,15 @@ package journal.io.api.dao;
 
 import journal.io.api.Journal;
 import journal.io.api.Location;
+import journal.io.api.operation.WriteCommand;
 
 import java.io.*;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
+import java.util.Iterator;
+import java.util.Queue;
+import java.util.zip.Adler32;
+import java.util.zip.Checksum;
 
 public class RandomAccessFile implements FileAccessBase {
     private java.io.RandomAccessFile randomAccessFile;
@@ -147,5 +152,41 @@ public class RandomAccessFile implements FileAccessBase {
     @Override
     public void write(byte[] data) throws IOException {
         randomAccessFile.write(data);
+    }
+
+    @Override
+    public byte[] createDataForWrite(int size, Queue<WriteCommand> writes, boolean checksum) {
+        ByteBuffer buffer = ByteBuffer.allocate(size);
+        Checksum adler32 = new Adler32();
+        WriteCommand control = writes.peek();
+
+
+        // Write an empty batch control record.
+        buffer.putInt(control.getLocation().getPointer());
+        buffer.putInt(Journal.BATCH_CONTROL_RECORD_SIZE);
+        buffer.put(Location.BATCH_CONTROL_RECORD_TYPE);
+        buffer.putLong(0);
+
+        Iterator<WriteCommand> commands = writes.iterator();
+        // Skip the control write:
+        commands.next();
+        // Process others:
+        while (commands.hasNext()) {
+            WriteCommand current = commands.next();
+            buffer.putInt(current.getLocation().getPointer());
+            buffer.putInt(current.getLocation().getSize());
+            buffer.put(current.getLocation().getType());
+            buffer.put(current.getData());
+            if (checksum) {
+                adler32.update(current.getData(), 0, current.getData().length);
+            }
+        }
+
+        // Now we can fill in the batch control record properly.
+        buffer.position(Journal.RECORD_HEADER_SIZE);
+        if (checksum) {
+            buffer.putLong(adler32.getValue());
+        }
+        return buffer.array();
     }
 }

@@ -271,7 +271,6 @@ public class Journal {
     }
 
 
-
     /**
      * Return an iterable to replay the journal by going through all records
      * locations.

@@ -242,74 +242,71 @@ public class DataFileAppender {
      * Signal writer thread to process batches.
      */
     private void signalBatch() {
-        writer.execute(new Runnable() {
-            @Override
-            public void run() {
-                // Wait for other threads writing on the same journal to finish:
-                while (writing.compareAndSet(false, true) == false) {
-                    try {
-                        Thread.sleep(SPIN_BACKOFF);
-                    } catch (Exception ex) {
-                    }
-                }
-                // TODO: Improve by employing different spinning strategies?
-                WriteBatch wb = batchQueue.poll();
+        writer.execute(() -> {
+            // Wait for other threads writing on the same journal to finish:
+            while (writing.compareAndSet(false, true) == false) {
                 try {
-                    while (wb != null) {
-                        if (!wb.isEmpty()) {
-                            boolean newOrRotated = lastAppendDataFile != wb.getDataFile();
-                            if (newOrRotated) {
-                                if (lastAppendRaf != null) {
-                                    lastAppendRaf.close();
-                                }
-                                lastAppendDataFile = wb.getDataFile();
-                                lastAppendRaf = lastAppendDataFile.createDataAccess();
-                            }
-
-                            // Perform batch:
-                            Location batchLocation = wb.perform(lastAppendRaf, journal.isChecksum(), journal.isPhysicalSync(), journal.getReplicationTarget());
-
-                            // Add batch location as hint:
-                            journal.getHints().put(batchLocation, batchLocation.getThisFilePosition());
-
-                            // Adjust journal length:
-                            journal.addToTotalLength(wb.getSize());
-
-                            // Now that the data is on disk, notify callbacks and remove the writes from the in-flight cache:
-                            for (WriteCommand current : wb.getWrites()) {
-                                try {
-                                    current.getLocation().getWriteCallback().onSync(current.getLocation());
-                                } catch (Throwable ex) {
-                                    warn(ex, ex.getMessage());
-                                }
-                                journal.getInflightWrites().remove(current.getLocation());
-                            }
-
-                            // Finally signal any waiting threads that the write is on disk.
-                            wb.getLatch().countDown();
-                        }
-                        // Poll next batch:
-                        wb = batchQueue.poll();
-                    }
+                    Thread.sleep(SPIN_BACKOFF);
                 } catch (Exception ex) {
-                    // Put back latest batch:
-                    batchQueue.offer(wb);
-                    // Notify error to all locations of all batches, and signal waiting threads:
-                    for (WriteBatch currentBatch : batchQueue) {
-                        for (WriteCommand currentWrite : currentBatch.getWrites()) {
-                            try {
-                                currentWrite.getLocation().getWriteCallback().onError(currentWrite.getLocation(), ex);
-                            } catch (Throwable innerEx) {
-                                warn(innerEx, innerEx.getMessage());
-                            }
-                        }
-                        currentBatch.getLatch().countDown();
-                    }
-                    // Propagate exception:
-                    asyncException.compareAndSet(null, ex);
-                } finally {
-                    writing.set(false);
                 }
+            }
+            // TODO: Improve by employing different spinning strategies?
+            WriteBatch wb = batchQueue.poll();
+            try {
+                while (wb != null) {
+                    if (!wb.isEmpty()) {
+                        boolean newOrRotated = lastAppendDataFile != wb.getDataFile();
+                        if (newOrRotated) {
+                            if (lastAppendRaf != null) {
+                                lastAppendRaf.close();
+                            }
+                            lastAppendDataFile = wb.getDataFile();
+                            lastAppendRaf = lastAppendDataFile.createDataAccess();
+                        }
+
+                        // Perform batch:
+                        Location batchLocation = wb.perform(lastAppendRaf, journal.isChecksum(), journal.isPhysicalSync(), journal.getReplicationTarget());
+
+                        // Add batch location as hint:
+                        journal.getHints().put(batchLocation, batchLocation.getThisFilePosition());
+
+                        // Adjust journal length:
+                        journal.addToTotalLength(wb.getSize());
+
+                        // Now that the data is on disk, notify callbacks and remove the writes from the in-flight cache:
+                        for (WriteCommand current : wb.getWrites()) {
+                            try {
+                                current.getLocation().getWriteCallback().onSync(current.getLocation());
+                            } catch (Throwable ex) {
+                                warn(ex, ex.getMessage());
+                            }
+                            journal.getInflightWrites().remove(current.getLocation());
+                        }
+
+                        // Finally signal any waiting threads that the write is on disk.
+                        wb.getLatch().countDown();
+                    }
+                    // Poll next batch:
+                    wb = batchQueue.poll();
+                }
+            } catch (Exception ex) {
+                // Put back latest batch:
+                batchQueue.offer(wb);
+                // Notify error to all locations of all batches, and signal waiting threads:
+                for (WriteBatch currentBatch : batchQueue) {
+                    for (WriteCommand currentWrite : currentBatch.getWrites()) {
+                        try {
+                            currentWrite.getLocation().getWriteCallback().onError(currentWrite.getLocation(), ex);
+                        } catch (Throwable innerEx) {
+                            warn(innerEx, innerEx.getMessage());
+                        }
+                    }
+                    currentBatch.getLatch().countDown();
+                }
+                // Propagate exception:
+                asyncException.compareAndSet(null, ex);
+            } finally {
+                writing.set(false);
             }
         });
     }

@@ -2,8 +2,10 @@ package journal.io.api.dao;
 
 
 import journal.io.api.Location;
+import journal.io.api.operation.WriteCommand;
 
 import java.io.IOException;
+import java.util.Queue;
 
 public interface FileAccessBase {
 
@@ -34,4 +36,6 @@ public interface FileAccessBase {
     boolean hasRecordHeader(long position, boolean isJournalOpened) throws IOException;
 
     void write(byte[] data) throws IOException;
+
+    byte[] createDataForWrite(int size, Queue<WriteCommand> writes, boolean checksum);
 }

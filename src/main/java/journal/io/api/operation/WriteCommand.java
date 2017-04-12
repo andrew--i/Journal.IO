@@ -21,7 +21,7 @@ public class WriteCommand {
         return location;
     }
 
-    byte[] getData() {
+    public byte[] getData() {
         return data;
     }
 
