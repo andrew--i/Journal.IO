@@ -2,9 +2,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
  * the License at
- *
+ * <p>
  * http://www.apache.org/licenses/LICENSE-2.0
- *
+ * <p>
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
  * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
@@ -13,42 +13,22 @@
  */
 package journal.io.api;
 
+import journal.io.api.exception.ClosedJournalException;
+import journal.io.api.exception.CompactedDataFileException;
+import journal.io.api.operation.*;
+
 import java.io.File;
-import java.io.FilenameFilter;
 import java.io.IOException;
-import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.Iterator;
-import java.util.LinkedList;
-import java.util.List;
+import java.util.*;
 import java.util.Map.Entry;
-import java.util.NoSuchElementException;
-import java.util.Queue;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ConcurrentNavigableMap;
-import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Executor;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.zip.Adler32;
 import java.util.zip.Checksum;
-import journal.io.util.IOHelper;
-import static journal.io.util.LogHelper.*;
+
+import static journal.io.util.LogHelper.warn;
 
 /**
  * Journal implementation based on append-only rotating logs and checksummed
@@ -63,19 +43,19 @@ import static journal.io.util.LogHelper.*;
  */
 public class Journal {
 
-    static final byte[] MAGIC_STRING = "J.IO".getBytes(Charset.forName("UTF-8"));
-    static final int MAGIC_SIZE = MAGIC_STRING.length;
-    static final int STORAGE_VERSION = 130;
-    static final int STORAGE_VERSION_SIZE = 4;
-    static final int FILE_HEADER_SIZE = MAGIC_SIZE + STORAGE_VERSION_SIZE;
+    public static final byte[] MAGIC_STRING = "J.IO".getBytes(Charset.forName("UTF-8"));
+    public static final int MAGIC_SIZE = MAGIC_STRING.length;
+    public static final int STORAGE_VERSION = 130;
+    public static final int STORAGE_VERSION_SIZE = 4;
+    public static final int FILE_HEADER_SIZE = MAGIC_SIZE + STORAGE_VERSION_SIZE;
     //
-    static final int RECORD_POINTER_SIZE = 4;
-    static final int RECORD_LENGTH_SIZE = 4;
-    static final int RECORD_TYPE_SIZE = 1;
-    static final int RECORD_HEADER_SIZE = RECORD_POINTER_SIZE + RECORD_LENGTH_SIZE + RECORD_TYPE_SIZE;
+    public static final int RECORD_POINTER_SIZE = 4;
+    public static final int RECORD_LENGTH_SIZE = 4;
+    public static final int RECORD_TYPE_SIZE = 1;
+    public static final int RECORD_HEADER_SIZE = RECORD_POINTER_SIZE + RECORD_LENGTH_SIZE + RECORD_TYPE_SIZE;
     //
-    static final int CHECKSUM_SIZE = 8;
-    static final int BATCH_CONTROL_RECORD_SIZE = RECORD_HEADER_SIZE + CHECKSUM_SIZE;
+    public static final int CHECKSUM_SIZE = 8;
+    public static final int BATCH_CONTROL_RECORD_SIZE = RECORD_HEADER_SIZE + CHECKSUM_SIZE;
     //
     static final String WRITER_THREAD_GROUP = "Journal.IO - Writer Thread Group";
     static final String WRITER_THREAD = "Journal.IO - Writer Thread";
@@ -85,7 +65,6 @@ public class Journal {
     static final int PRE_START_POINTER = -1;
     //
     static final String DEFAULT_DIRECTORY = ".";
-    static final String DEFAULT_ARCHIVE_DIRECTORY = "data-archive";
     static final String DEFAULT_FILE_PREFIX = "db-";
     static final String DEFAULT_FILE_SUFFIX = ".log";
     static final int DEFAULT_MAX_FILE_LENGTH = 1024 * 1024 * 32;
@@ -93,15 +72,14 @@ public class Journal {
     static final int MIN_FILE_LENGTH = 1024;
     static final int DEFAULT_MAX_BATCH_SIZE = DEFAULT_MAX_FILE_LENGTH;
     //
-    private final ConcurrentNavigableMap<Integer, DataFile> dataFiles = new ConcurrentSkipListMap<Integer, DataFile>();
-    private final ConcurrentNavigableMap<Location, Long> hints = new ConcurrentSkipListMap<Location, Long>();
-    private final ConcurrentMap<Location, WriteCommand> inflightWrites = new ConcurrentHashMap<Location, WriteCommand>();
+    private final ConcurrentNavigableMap<Integer, DataFile> dataFiles = new ConcurrentSkipListMap<>();
+    private final ConcurrentNavigableMap<Location, Long> hints = new ConcurrentSkipListMap<>();
+    private final ConcurrentMap<Location, WriteCommand> inflightWrites = new ConcurrentHashMap<>();
     private final AtomicLong totalLength = new AtomicLong();
     //
     private volatile Location lastAppendLocation;
     //
     private volatile File directory = new File(DEFAULT_DIRECTORY);
-    private volatile File directoryArchive = new File(DEFAULT_ARCHIVE_DIRECTORY);
     //
     private volatile String filePrefix = DEFAULT_FILE_PREFIX;
     private volatile String fileSuffix = DEFAULT_FILE_SUFFIX;
@@ -119,8 +97,6 @@ public class Journal {
     private volatile DataFileAccessor accessor;
     //
     private volatile boolean opened;
-    //
-    private volatile boolean archiveFiles;
     //
     private RecoveryErrorHandler recoveryErrorHandler;
     //
@@ -163,29 +139,21 @@ public class Journal {
 
         dataFiles.clear();
 
-        File[] files = directory.listFiles(new FilenameFilter() {
-            public boolean accept(File dir, String n) {
-                return dir.equals(directory) && n.startsWith(filePrefix) && n.endsWith(fileSuffix);
-            }
-        });
+        File[] files = directory.listFiles((dir, n) -> dir.equals(directory) && n.startsWith(filePrefix) && n.endsWith(fileSuffix));
         if (files == null) {
             throw new IOException("Failed to access content of " + directory);
         }
 
-        Arrays.sort(files, new Comparator<File>() {
-            @Override
-            public int compare(File f1, File f2) {
-                String name1 = f1.getName();
-                int index1 = Integer.parseInt(name1.substring(filePrefix.length(), name1.length() - fileSuffix.length()));
-                String name2 = f2.getName();
-                int index2 = Integer.parseInt(name2.substring(filePrefix.length(), name2.length() - fileSuffix.length()));
-                return index1 - index2;
-            }
+        Arrays.sort(files, (f1, f2) -> {
+            String name1 = f1.getName();
+            int index1 = Integer.parseInt(name1.substring(filePrefix.length(), name1.length() - fileSuffix.length()));
+            String name2 = f2.getName();
+            int index2 = Integer.parseInt(name2.substring(filePrefix.length(), name2.length() - fileSuffix.length()));
+            return index1 - index2;
         });
         if (files.length > 0) {
-            for (int i = 0; i < files.length; i++) {
+            for (File file : files) {
                 try {
-                    File file = files[i];
                     String name = file.getName();
                     int index = Integer.parseInt(name.substring(filePrefix.length(), name.length() - fileSuffix.length()));
                     DataFile dataFile = new DataFile(file, index);
@@ -234,42 +202,12 @@ public class Journal {
     }
 
     /**
-     * Compact the journal, reducing size of logs containing deleted entries and
-     * completely removing empty (with only deleted entries) logs.
-     *
-     * @throws IOException
-     * @throws ClosedJournalException
-     */
-    public synchronized void compact() throws ClosedJournalException, IOException {
-        if (opened) {
-            for (DataFile file : dataFiles.values()) {
-                // Can't compact the data file (or subsequent files) that is currently being written to:
-                if (file.getDataFileId() >= lastAppendLocation.getDataFileId()) {
-                    continue;
-                } else {
-                    Location firstUserLocation = goToFirstLocation(file, Location.USER_RECORD_TYPE, false);
-                    if (firstUserLocation == null) {
-                        removeDataFile(file);
-                    } else {
-                        Location firstDeletedLocation = goToFirstLocation(file, Location.DELETED_RECORD_TYPE, false);
-                        if (firstDeletedLocation != null) {
-                            compactDataFile(file);
-                        }
-                    }
-                }
-            }
-        } else {
-            throw new ClosedJournalException("The journal is closed!");
-        }
-    }
-
-    /**
      * Sync asynchronously written records on disk.
      *
      * @throws IOException
      * @throws ClosedJournalException
      */
-    public void sync() throws ClosedJournalException, IOException {
+    public void sync() throws IOException {
         try {
             appender.sync().get();
             if (appender.getAsyncException() != null) {
@@ -277,23 +215,6 @@ public class Journal {
             }
         } catch (Exception ex) {
             throw new IllegalStateException(ex.getMessage(), ex);
-        }
-    }
-
-    /**
-     * Truncate the journal, removing all log files. Please note truncate
-     * requires the journal to be closed.
-     *
-     * @throws IOException
-     * @throws OpenJournalException
-     */
-    public synchronized void truncate() throws OpenJournalException, IOException {
-        if (!opened) {
-            for (DataFile file : dataFiles.values()) {
-                removeDataFile(file);
-            }
-        } else {
-            throw new OpenJournalException("The journal is open! The journal must be closed to be truncated.");
         }
     }
 
@@ -310,8 +231,8 @@ public class Journal {
      * @throws ClosedJournalException
      * @throws CompactedDataFileException
      */
-    public byte[] read(Location location, ReadType read) throws ClosedJournalException, CompactedDataFileException, IOException {
-        return accessor.readLocation(location, read.equals(ReadType.SYNC) ? true : false);
+    public byte[] read(Location location, ReadType read) throws IOException {
+        return accessor.readLocation(location, read.equals(ReadType.SYNC));
     }
 
     /**
@@ -326,7 +247,7 @@ public class Journal {
      * @throws IOException
      * @throws ClosedJournalException
      */
-    public Location write(byte[] data, WriteType write) throws ClosedJournalException, IOException {
+    public Location write(byte[] data, WriteType write) throws IOException {
         return write(data, write, Location.NoWriteCallback.INSTANCE);
     }
 
@@ -345,24 +266,11 @@ public class Journal {
      * @throws IOException
      * @throws ClosedJournalException
      */
-    public Location write(byte[] data, WriteType write, WriteCallback callback) throws ClosedJournalException, IOException {
-        Location loc = appender.storeItem(data, Location.USER_RECORD_TYPE, write.equals(WriteType.SYNC) ? true : false, callback);
-        return loc;
+    public Location write(byte[] data, WriteType write, WriteCallback callback) throws IOException {
+        return appender.storeItem(data, Location.USER_RECORD_TYPE, write.equals(WriteType.SYNC), callback);
     }
 
-    /**
-     * Delete the record at the given {@link Location}.<br/> Deletes cause first
-     * a batch sync and always are logical: records will be actually deleted at
-     * log cleanup time.
-     *
-     * @param location
-     * @throws IOException
-     * @throws ClosedJournalException
-     * @throws CompactedDataFileException
-     */
-    public void delete(Location location) throws ClosedJournalException, CompactedDataFileException, IOException {
-        accessor.updateLocation(location, Location.DELETED_RECORD_TYPE, physicalSync);
-    }
+
 
     /**
      * Return an iterable to replay the journal by going through all records
@@ -373,12 +281,12 @@ public class Journal {
      * @throws ClosedJournalException
      * @throws CompactedDataFileException
      */
-    public Iterable<Location> redo() throws ClosedJournalException, CompactedDataFileException, IOException {
+    public Iterable<Location> redo() throws IOException {
         Entry<Integer, DataFile> firstEntry = dataFiles.firstEntry();
         if (firstEntry == null) {
-            return new Redo(null);
+            return new Redo(this, null);
         }
-        return new Redo(goToFirstLocation(firstEntry.getValue(), Location.USER_RECORD_TYPE, true));
+        return new Redo(this, goToFirstLocation(firstEntry.getValue(), Location.USER_RECORD_TYPE, true));
     }
 
     /**
@@ -391,8 +299,8 @@ public class Journal {
      * @throws CompactedDataFileException
      * @throws ClosedJournalException
      */
-    public Iterable<Location> redo(Location start) throws ClosedJournalException, CompactedDataFileException, IOException {
-        return new Redo(start);
+    public Iterable<Location> redo(Location start) throws IOException {
+        return new Redo(this, start);
     }
 
     /**
@@ -405,7 +313,7 @@ public class Journal {
      * @throws CompactedDataFileException
      * @throws ClosedJournalException
      */
-    public Iterable<Location> undo() throws ClosedJournalException, CompactedDataFileException, IOException {
+    public Iterable<Location> undo() throws IOException {
         return new Undo(redo());
     }
 
@@ -420,21 +328,8 @@ public class Journal {
      * @throws CompactedDataFileException
      * @throws ClosedJournalException
      */
-    public Iterable<Location> undo(Location end) throws ClosedJournalException, CompactedDataFileException, IOException {
+    public Iterable<Location> undo(Location end) throws IOException {
         return new Undo(redo(end));
-    }
-
-    /**
-     * Get the files part of this journal.
-     *
-     * @return
-     */
-    public List<File> getFiles() {
-        List<File> result = new LinkedList<File>();
-        for (DataFile dataFile : dataFiles.values()) {
-            result.add(dataFile.getFile());
-        }
-        return result;
     }
 
     /**
@@ -454,28 +349,10 @@ public class Journal {
     }
 
     /**
-     * Get the journal directory containing log files.
-     *
-     * @return
-     */
-    public File getDirectory() {
-        return directory;
-    }
-
-    /**
      * Set the journal directory containing log files.
      */
     public void setDirectory(File directory) {
         this.directory = directory;
-    }
-
-    /**
-     * Get the prefix for log files.
-     *
-     * @return
-     */
-    public String getFilePrefix() {
-        return filePrefix;
     }
 
     /**
@@ -488,51 +365,6 @@ public class Journal {
     }
 
     /**
-     * Get the optional archive directory used to archive cleaned up log files.
-     *
-     * @return
-     */
-    public File getDirectoryArchive() {
-        return directoryArchive;
-    }
-
-    /**
-     * Set the optional archive directory used to archive cleaned up log files.
-     *
-     * @param directoryArchive
-     */
-    public void setDirectoryArchive(File directoryArchive) {
-        this.directoryArchive = directoryArchive;
-    }
-
-    /**
-     * Return true if cleaned up log files should be archived, false otherwise.
-     *
-     * @return
-     */
-    public boolean isArchiveFiles() {
-        return archiveFiles;
-    }
-
-    /**
-     * Set true if cleaned up log files should be archived, false otherwise.
-     *
-     * @param archiveFiles
-     */
-    public void setArchiveFiles(boolean archiveFiles) {
-        this.archiveFiles = archiveFiles;
-    }
-
-    /**
-     * Set the {@link ReplicationTarget} to replicate batch writes to.
-     *
-     * @param replicationTarget
-     */
-    public void setReplicationTarget(ReplicationTarget replicationTarget) {
-        this.replicationTarget = replicationTarget;
-    }
-
-    /**
      * Get the {@link ReplicationTarget} to replicate batch writes to.
      *
      * @return
@@ -542,12 +374,12 @@ public class Journal {
     }
 
     /**
-     * Get the suffix for log files.
+     * Set the {@link ReplicationTarget} to replicate batch writes to.
      *
-     * @return
+     * @param replicationTarget
      */
-    public String getFileSuffix() {
-        return fileSuffix;
+    public void setReplicationTarget(ReplicationTarget replicationTarget) {
+        this.replicationTarget = replicationTarget;
     }
 
     /**
@@ -620,16 +452,6 @@ public class Journal {
     }
 
     /**
-     * Set the milliseconds interval for resources disposal: i.e., un-accessed
-     * files will be closed.
-     *
-     * @param disposeInterval
-     */
-    public void setDisposeInterval(long disposeInterval) {
-        this.disposeInterval = disposeInterval;
-    }
-
-    /**
      * Get the milliseconds interval for resources disposal.
      *
      * @return
@@ -639,28 +461,13 @@ public class Journal {
     }
 
     /**
-     * Set the Executor to use for writing new record entries.
+     * Set the milliseconds interval for resources disposal: i.e., un-accessed
+     * files will be closed.
      *
-     * Important note: the provided Executor must be manually closed.
-     *
-     * @param writer
+     * @param disposeInterval
      */
-    public void setWriter(Executor writer) {
-        this.writer = writer;
-        this.managedWriter = false;
-    }
-
-    /**
-     * Set the ScheduledExecutorService to use for internal resources disposing.
-     *
-     * Important note: the provided ScheduledExecutorService must be manually
-     * closed.
-     *
-     * @param writer
-     */
-    public void setDisposer(ScheduledExecutorService disposer) {
-        this.disposer = disposer;
-        this.managedDisposer = false;
+    public void setDisposeInterval(long disposeInterval) {
+        this.disposeInterval = disposeInterval;
     }
 
     /**
@@ -676,23 +483,44 @@ public class Journal {
         return directory.toString();
     }
 
-    boolean isOpened() {
+    public boolean isOpened() {
         return opened;
     }
 
-    Executor getWriter() {
+    public Executor getWriter() {
         return writer;
     }
 
-    ScheduledExecutorService getDisposer() {
+    /**
+     * Set the Executor to use for writing new record entries.
+     * <p>
+     * Important note: the provided Executor must be manually closed.
+     *
+     * @param writer
+     */
+    public void setWriter(Executor writer) {
+        this.writer = writer;
+        this.managedWriter = false;
+    }
+
+    public ScheduledExecutorService getDisposer() {
         return disposer;
     }
 
-    ConcurrentNavigableMap<Integer, DataFile> getDataFiles() {
-        return dataFiles;
+    /**
+     * Set the ScheduledExecutorService to use for internal resources disposing.
+     * <p>
+     * Important note: the provided ScheduledExecutorService must be manually
+     * closed.
+     *
+     * @param disposer
+     */
+    public void setDisposer(ScheduledExecutorService disposer) {
+        this.disposer = disposer;
+        this.managedDisposer = false;
     }
 
-    DataFile getDataFile(Integer id) throws CompactedDataFileException {
+    public DataFile getDataFile(Integer id) throws CompactedDataFileException {
         DataFile result = dataFiles.get(id);
         if (result != null) {
             return result;
@@ -701,23 +529,23 @@ public class Journal {
         }
     }
 
-    ConcurrentNavigableMap<Location, Long> getHints() {
+    public ConcurrentNavigableMap<Location, Long> getHints() {
         return hints;
     }
 
-    ConcurrentMap<Location, WriteCommand> getInflightWrites() {
+    public ConcurrentMap<Location, WriteCommand> getInflightWrites() {
         return inflightWrites;
     }
 
-    DataFile getCurrentWriteDataFile() throws IOException {
+    public DataFile getCurrentWriteDataFile() throws IOException {
         if (dataFiles.isEmpty()) {
             newDataFile();
         }
         return dataFiles.lastEntry().getValue();
     }
 
-    DataFile newDataFile() throws IOException {
-        int nextNum = !dataFiles.isEmpty() ? dataFiles.lastEntry().getValue().getDataFileId().intValue() + 1 : 1;
+    public DataFile newDataFile() throws IOException {
+        int nextNum = !dataFiles.isEmpty() ? dataFiles.lastEntry().getValue().getDataFileId() + 1 : 1;
         File file = getFile(nextNum);
         DataFile nextWriteFile = new DataFile(file, nextNum);
         nextWriteFile.writeHeader();
@@ -728,15 +556,15 @@ public class Journal {
         return nextWriteFile;
     }
 
-    Location getLastAppendLocation() {
+    public Location getLastAppendLocation() {
         return lastAppendLocation;
     }
 
-    void setLastAppendLocation(Location location) {
+    public void setLastAppendLocation(Location location) {
         this.lastAppendLocation = location;
     }
 
-    void addToTotalLength(int size) {
+    public void addToTotalLength(int size) {
         totalLength.addAndGet(size);
     }
 
@@ -755,7 +583,7 @@ public class Journal {
         }
     }
 
-    private Location goToNextLocation(Location start, final byte type, final boolean goToNextFile) throws IOException {
+    public Location goToNextLocation(Location start, final byte type, final boolean goToNextFile) throws IOException {
         Integer currentDataFileId = start.getDataFileId();
         Location currentLocation = new Location(start);
         Location result = null;
@@ -789,72 +617,6 @@ public class Journal {
         return file;
     }
 
-    private void removeDataFile(DataFile dataFile) throws IOException {
-        dataFiles.remove(dataFile.getDataFileId());
-        totalLength.addAndGet(-dataFile.getLength());
-        Location toRemove = new Location(dataFile.getDataFileId());
-        Location candidate = null;
-        while ((candidate = hints.higherKey(toRemove)) != null && candidate.getDataFileId() == toRemove.getDataFileId()) {
-            hints.remove(candidate);
-        }
-        accessor.dispose(dataFile);
-        if (archiveFiles) {
-            dataFile.move(getDirectoryArchive());
-        } else {
-            boolean deleted = dataFile.delete();
-            if (!deleted) {
-                warn("Failed to discard data file %s", dataFile.getFile());
-            }
-        }
-    }
-
-    private void compactDataFile(DataFile currentFile) throws IOException {
-        accessor.pause();
-        try {
-            // Configure new tmp file:
-            DataFile tmpFile = new DataFile(
-                    new File(currentFile.getFile().getParent(), filePrefix + currentFile.getDataFileId() + fileSuffix + ".tmp"),
-                    currentFile.getDataFileId());
-            tmpFile.setDataFileGeneration(currentFile.getDataFileGeneration());
-            tmpFile.setNext(currentFile.getNext());
-            // Write header and batch containing data:
-            tmpFile.writeHeader();
-            RandomAccessFile raf = tmpFile.openRandomAccessFile();
-            Location tmpBatchLocation = null;
-            try {
-                Location currentUserLocation = goToFirstLocation(tmpFile, Location.USER_RECORD_TYPE, false);
-                WriteBatch batch = new WriteBatch(tmpFile, 0);
-                batch.prepareBatch();
-                while (currentUserLocation != null) {
-                    byte[] data = accessor.readLocation(currentUserLocation, false);
-                    WriteCommand write = new WriteCommand(currentUserLocation, data, true);
-                    batch.appendBatch(write);
-                    currentUserLocation = goToNextLocation(currentUserLocation, Location.USER_RECORD_TYPE, false);
-                }
-                // Only a single batch is used to keep data pointers the same!
-                // TODO: embed batch pointers into locations to support 
-                // multiple batches, so that when the batch pointer changes,
-                // a new batch is created during compaction.
-                tmpBatchLocation = batch.perform(raf, true, true, null);
-            } finally {
-                if (raf != null) {
-                    raf.close();
-                }
-            }
-            removeDataFile(currentFile);
-            dataFiles.put(tmpFile.getDataFileId(), tmpFile);
-            totalLength.addAndGet(tmpFile.getLength());
-            tmpFile.rename(currentFile.getFile());
-            // Add new hints:
-            assert tmpBatchLocation != null;
-            hints.put(tmpBatchLocation, tmpBatchLocation.getThisFilePosition());
-            // Increment generation so that sequential reads from locations
-            // referring to a different generation will not be valid:
-            tmpFile.incrementGeneration();
-        } finally {
-            accessor.resume();
-        }
-    }
 
     private Location recoveryCheck() throws IOException {
         List<Location> checksummedLocations = new LinkedList<Location>();
@@ -867,8 +629,7 @@ public class Journal {
             } catch (IOException ex) {
                 DataFile toDelete = currentFile;
                 currentFile = toDelete.getNext();
-                warn(ex, "Deleting data file: %s", toDelete);
-                removeDataFile(toDelete);
+                warn(ex, "Data file fails header verification: %s", toDelete);
                 continue;
             }
             try {
@@ -914,7 +675,6 @@ public class Journal {
                 }
             } catch (Throwable ex) {
                 warn(ex, "Corrupted data found while reading first batch location, deleting whole data file: %s", currentFile);
-                removeDataFile(currentFile);
             }
             currentFile = currentFile.getNext();
         }
@@ -931,201 +691,14 @@ public class Journal {
         return lastRecord;
     }
 
-    public static enum ReadType {
+    public enum ReadType {
 
-        SYNC, ASYNC;
+        SYNC, ASYNC
     }
 
-    public static enum WriteType {
+    public enum WriteType {
 
-        SYNC, ASYNC;
-    }
-
-    static class WriteBatch {
-
-        private static byte[] EMPTY_BUFFER = new byte[0];
-        //
-        private final DataFile dataFile;
-        private final Queue<WriteCommand> writes = new ConcurrentLinkedQueue<WriteCommand>();
-        private final CountDownLatch latch = new CountDownLatch(1);
-        private volatile long offset;
-        private volatile int pointer;
-        private volatile int size;
-
-        WriteBatch() {
-            this.dataFile = null;
-            this.offset = -1;
-            this.pointer = -1;
-        }
-
-        WriteBatch(DataFile dataFile, int pointer) throws IOException {
-            this.dataFile = dataFile;
-            this.offset = dataFile.getLength();
-            this.pointer = pointer;
-            this.size = BATCH_CONTROL_RECORD_SIZE;
-        }
-
-        boolean canBatch(WriteCommand write, int maxWriteBatchSize, int maxFileLength) throws IOException {
-            int thisBatchSize = size + write.location.getSize();
-            long thisFileLength = offset + thisBatchSize;
-            if (thisBatchSize > maxWriteBatchSize || thisFileLength > maxFileLength) {
-                return false;
-            } else {
-                return true;
-            }
-        }
-
-        WriteCommand prepareBatch() throws IOException {
-            WriteCommand controlRecord = new WriteCommand(new Location(), EMPTY_BUFFER, false);
-            controlRecord.location.setType(Location.BATCH_CONTROL_RECORD_TYPE);
-            controlRecord.location.setSize(Journal.BATCH_CONTROL_RECORD_SIZE);
-            controlRecord.location.setDataFileId(dataFile.getDataFileId());
-            controlRecord.location.setPointer(pointer);
-            size = controlRecord.location.getSize();
-            dataFile.incrementLength(size);
-            writes.offer(controlRecord);
-            return controlRecord;
-        }
-
-        void appendBatch(WriteCommand writeRecord) throws IOException {
-            size += writeRecord.location.getSize();
-            dataFile.incrementLength(writeRecord.location.getSize());
-            writes.offer(writeRecord);
-        }
-
-        Location perform(RandomAccessFile file, boolean checksum, boolean physicalSync, ReplicationTarget replicationTarget) throws IOException {
-            ByteBuffer buffer = ByteBuffer.allocate(size);
-            Checksum adler32 = new Adler32();
-            WriteCommand control = writes.peek();
-
-            // Write an empty batch control record.
-            buffer.putInt(control.location.getPointer());
-            buffer.putInt(BATCH_CONTROL_RECORD_SIZE);
-            buffer.put(Location.BATCH_CONTROL_RECORD_TYPE);
-            buffer.putLong(0);
-
-            Iterator<WriteCommand> commands = writes.iterator();
-            // Skip the control write:
-            commands.next();
-            // Process others:
-            while (commands.hasNext()) {
-                WriteCommand current = commands.next();
-                buffer.putInt(current.location.getPointer());
-                buffer.putInt(current.location.getSize());
-                buffer.put(current.location.getType());
-                buffer.put(current.getData());
-                if (checksum) {
-                    adler32.update(current.getData(), 0, current.getData().length);
-                }
-            }
-
-            // Now we can fill in the batch control record properly.
-            buffer.position(Journal.RECORD_HEADER_SIZE);
-            if (checksum) {
-                buffer.putLong(adler32.getValue());
-            }
-
-            // Now do the 1 big write.
-            file.seek(offset);
-            file.write(buffer.array(), 0, size);
-
-            // Then sync:
-            if (physicalSync) {
-                IOHelper.sync(file.getFD());
-            }
-
-            // And replicate:
-            try {
-                if (replicationTarget != null) {
-                    replicationTarget.replicate(control.location, buffer.array());
-                }
-            } catch (Throwable ex) {
-                warn("Cannot replicate!", ex);
-            }
-
-            control.location.setThisFilePosition(offset);
-            return control.location;
-        }
-
-        DataFile getDataFile() {
-            return dataFile;
-        }
-
-        int getSize() {
-            return size;
-        }
-
-        CountDownLatch getLatch() {
-            return latch;
-        }
-
-        Collection<WriteCommand> getWrites() {
-            return Collections.unmodifiableCollection(writes);
-        }
-
-        boolean isEmpty() {
-            return writes.isEmpty();
-        }
-
-        int incrementAndGetPointer() {
-            return ++pointer;
-        }
-    }
-
-    static class WriteCommand {
-
-        private final Location location;
-        private final boolean sync;
-        private volatile byte[] data;
-
-        WriteCommand(Location location, byte[] data, boolean sync) {
-            this.location = location;
-            this.data = data;
-            this.sync = sync;
-        }
-
-        public Location getLocation() {
-            return location;
-        }
-
-        byte[] getData() {
-            return data;
-        }
-
-        boolean isSync() {
-            return sync;
-        }
-    }
-
-    static class WriteFuture implements Future<Boolean> {
-
-        private final CountDownLatch latch;
-
-        WriteFuture(CountDownLatch latch) {
-            this.latch = latch != null ? latch : new CountDownLatch(0);
-        }
-
-        public boolean cancel(boolean mayInterruptIfRunning) {
-            throw new UnsupportedOperationException("Cannot cancel this type of future!");
-        }
-
-        public boolean isCancelled() {
-            throw new UnsupportedOperationException("Cannot cancel this type of future!");
-        }
-
-        public boolean isDone() {
-            return latch.getCount() == 0;
-        }
-
-        public Boolean get() throws InterruptedException, ExecutionException {
-            latch.await();
-            return true;
-        }
-
-        public Boolean get(long timeout, TimeUnit unit) throws InterruptedException, ExecutionException, TimeoutException {
-            boolean success = latch.await(timeout, unit);
-            return success;
-        }
+        SYNC, ASYNC
     }
 
     private static class JournalThreadFactory implements ThreadFactory {
@@ -1144,125 +717,4 @@ public class Journal {
         }
     }
 
-    private class Redo implements Iterable<Location> {
-
-        private final Location start;
-
-        public Redo(Location start) {
-            this.start = start;
-        }
-
-        public Iterator<Location> iterator() {
-            return new Iterator<Location>() {
-                private Location current = null;
-                private Location next = start;
-
-                public boolean hasNext() {
-                    return next != null;
-                }
-
-                public Location next() {
-                    if (next != null) {
-                        try {
-                            current = next;
-                            next = goToNextLocation(current, Location.USER_RECORD_TYPE, true);
-                            // TODO: reading the next next location at this point
-                            // (*before* the related hasNext call) is not
-                            // really correct.
-                            return current;
-                        } catch (IOException ex) {
-                            throw new IllegalStateException(ex.getMessage(), ex);
-                        }
-                    } else {
-                        throw new NoSuchElementException();
-                    }
-                }
-
-                public void remove() {
-                    if (current != null) {
-                        try {
-                            delete(current);
-                            current = null;
-                        } catch (IOException ex) {
-                            throw new IllegalStateException(ex.getMessage(), ex);
-                        }
-                    } else {
-                        throw new IllegalStateException("No location to remove!");
-                    }
-                }
-            };
-        }
-    }
-
-    private class Undo implements Iterable<Location> {
-
-        private final Object[] stack;
-        private final int start;
-
-        public Undo(Iterable<Location> redo) {
-            // Object arrays of 12 are about the size of a cache-line (64 bytes)
-            // or two, depending on the oops-size.
-            Object[] stack = new Object[12];
-            // the last element of the arrays refer to the next "fat node."
-            // the last element of the last node is null as an end-mark
-            int pointer = 10;
-            Iterator<Location> itr = redo.iterator();
-            while (itr.hasNext()) {
-                Location location = itr.next();
-                stack[pointer] = location;
-                if (pointer == 0) {
-                    Object[] tmp = new Object[12];
-                    tmp[11] = stack;
-                    stack = tmp;
-                    pointer = 10;
-                } else {
-                    pointer--;
-                }
-            }
-            this.start = pointer + 1; // +1 to go back to last write
-            this.stack = stack;
-        }
-
-        @Override
-        public Iterator<Location> iterator() {
-            return new Iterator<Location>() {
-                private int pointer = start;
-                private Object[] ref = stack;
-                private Location current;
-
-                @Override
-                public boolean hasNext() {
-                    return ref[pointer] != null;
-                }
-
-                @Override
-                public Location next() {
-                    Object next = ref[pointer];
-                    if (!(ref[pointer] instanceof Location)) {
-                        ref = (Object[]) ref[pointer];
-                        if (ref == null) {
-                            throw new NoSuchElementException();
-                        }
-                        pointer = 0;
-                        return next();
-                    }
-                    pointer++;
-                    return current = (Location) next;
-                }
-
-                @Override
-                public void remove() {
-                    if (current == null) {
-                        throw new IllegalStateException("No location to remove!");
-                    }
-                    try {
-                        delete(current);
-                        current = null;
-                    } catch (IOException e) {
-                        throw new IllegalStateException(e.getMessage(), e);
-                    }
-                }
-            };
-        }
-    }
 }
