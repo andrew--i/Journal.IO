@@ -1,5 +1,7 @@
 package journal.io.api.dao;
 
+import java.io.File;
+
 public interface FileAccessConfiguration {
 	String getMagicString();
 
@@ -24,4 +26,8 @@ public interface FileAccessConfiguration {
 	int getChecksumSize();
 
 	int getBatchControlRecordSize();
+
+	int getDataLength(byte[] data);
+
+	long getFileLength(File file);
 }

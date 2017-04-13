@@ -68,9 +68,8 @@ public class WriteBatch {
     Location perform(FileAccess file, boolean checksum, boolean physicalSync, ReplicationTarget replicationTarget) throws IOException {
 
         WriteCommand control = writes.peek();
+
         byte[] dataToWrite = file.createDataForWrite(size, writes, checksum);
-
-
         // Now do the 1 big write.
         file.seek(offset);
         file.write(dataToWrite);
@@ -79,7 +78,6 @@ public class WriteBatch {
         if (physicalSync) {
             file.sync();
         }
-
         // And replicate:
         try {
             if (replicationTarget != null) {

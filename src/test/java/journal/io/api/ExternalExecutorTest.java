@@ -13,6 +13,7 @@
  */
 package journal.io.api;
 
+import org.junit.Ignore;
 import org.junit.Test;
 
 import java.io.IOException;
@@ -26,6 +27,7 @@ import static org.junit.Assert.assertEquals;
 /**
  * @author Sergio Bossa
  */
+@Ignore
 public class ExternalExecutorTest extends AbstractJournalTest {
 
 	@Test

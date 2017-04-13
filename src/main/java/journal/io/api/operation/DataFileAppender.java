@@ -19,6 +19,7 @@ import journal.io.api.Location;
 import journal.io.api.WriteCallback;
 import journal.io.api.dao.ConfigurationFactory;
 import journal.io.api.dao.FileAccess;
+import journal.io.api.dao.FileAccessConfiguration;
 import journal.io.api.exception.ClosedJournalException;
 
 import java.io.IOException;
@@ -62,7 +63,8 @@ public class DataFileAppender {
     }
 
     public Location storeItem(byte[] data, byte type, boolean sync, WriteCallback callback) throws IOException {
-        int size = ConfigurationFactory.CONFIGURATION().getRecordHeaderSize() + data.length;
+        final FileAccessConfiguration configuration = ConfigurationFactory.CONFIGURATION();
+        int size = configuration.getRecordHeaderSize() + configuration.getDataLength(data);
 
         Location location = new Location();
         location.setSize(size);

@@ -13,6 +13,7 @@
  */
 package journal.io.api;
 
+import journal.io.api.dao.ConfigurationFactory;
 import journal.io.api.dao.FileAccess;
 import journal.io.api.dao.FileAccessFactory;
 
@@ -36,7 +37,7 @@ public class DataFile implements Comparable<DataFile> {
 		this.file = file;
 		this.dataFileId = id;
 		this.dataFileGeneration = 0;
-		this.length = new AtomicLong((file.exists() ? file.length() : 0));
+		this.length = new AtomicLong(ConfigurationFactory.CONFIGURATION().getFileLength(file)) ;
 	}
 
 	File getFile() {

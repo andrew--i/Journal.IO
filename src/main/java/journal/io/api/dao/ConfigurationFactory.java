@@ -11,7 +11,8 @@ public class ConfigurationFactory {
 
 	public static FileAccessConfiguration CONFIGURATION() {
 		if (fileAccessConfiguration == null) {
-			fileAccessConfiguration = new RandomFileAccessConfiguration();
+//			fileAccessConfiguration = new RandomFileAccessConfiguration();
+			fileAccessConfiguration = new BufferedReaderFileAccessConfiguration();
 		}
 		return fileAccessConfiguration;
 	}
