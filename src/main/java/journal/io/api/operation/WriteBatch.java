@@ -1,10 +1,10 @@
 package journal.io.api.operation;
 
 import journal.io.api.DataFile;
-import journal.io.api.Journal;
 import journal.io.api.Location;
 import journal.io.api.ReplicationTarget;
-import journal.io.api.dao.FileAccessBase;
+import journal.io.api.dao.ConfigurationFactory;
+import journal.io.api.dao.FileAccess;
 
 import java.io.IOException;
 import java.util.Collection;
@@ -33,7 +33,7 @@ public class WriteBatch {
         this.dataFile = dataFile;
         this.offset = dataFile.getLength();
         this.pointer = pointer;
-        this.size = Journal.BATCH_CONTROL_RECORD_SIZE;
+        this.size = ConfigurationFactory.CONFIGURATION().getBatchControlRecordSize();
     }
 
     boolean canBatch(WriteCommand write, int maxWriteBatchSize, int maxFileLength) throws IOException {
@@ -50,7 +50,7 @@ public class WriteBatch {
         WriteCommand controlRecord = new WriteCommand(new Location(), EMPTY_BUFFER, false);
         Location location = controlRecord.getLocation();
         location.setType(Location.BATCH_CONTROL_RECORD_TYPE);
-        location.setSize(Journal.BATCH_CONTROL_RECORD_SIZE);
+        location.setSize(ConfigurationFactory.CONFIGURATION().getBatchControlRecordSize());
         location.setDataFileId(dataFile.getDataFileId());
         location.setPointer(pointer);
         size = location.getSize();
@@ -65,7 +65,7 @@ public class WriteBatch {
         writes.offer(writeRecord);
     }
 
-    Location perform(FileAccessBase file, boolean checksum, boolean physicalSync, ReplicationTarget replicationTarget) throws IOException {
+    Location perform(FileAccess file, boolean checksum, boolean physicalSync, ReplicationTarget replicationTarget) throws IOException {
 
         WriteCommand control = writes.peek();
         byte[] dataToWrite = file.createDataForWrite(size, writes, checksum);

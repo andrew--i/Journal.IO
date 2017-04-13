@@ -13,33 +13,35 @@ import java.util.Queue;
 import java.util.zip.Adler32;
 import java.util.zip.Checksum;
 
-public class RandomAccessFile implements FileAccessBase {
+public class RandomAccessFile implements FileAccess {
     private java.io.RandomAccessFile randomAccessFile;
+    private FileAccessConfiguration configuration;
 
-    public RandomAccessFile(File file) throws FileNotFoundException {
+    public RandomAccessFile(File file, FileAccessConfiguration configuration) throws FileNotFoundException {
         randomAccessFile = new java.io.RandomAccessFile(file, "rw");
+        this.configuration = configuration;
     }
 
     @Override
-    public long writeHeader() throws IOException {
+    public long writeFileHeader() throws IOException {
         try {
-            randomAccessFile.write(Journal.MAGIC_STRING);
-            randomAccessFile.writeInt(Journal.STORAGE_VERSION);
-            return Journal.FILE_HEADER_SIZE;
+            randomAccessFile.write(configuration.getMagicStringBytes());
+            randomAccessFile.writeInt(configuration.getStorageVersion());
+            return configuration.getFileHeaderSize();
         } finally {
             randomAccessFile.close();
         }
     }
 
     @Override
-    public void verifyHeader() throws IOException {
+    public void verifyFileHeader() throws IOException {
         java.io.RandomAccessFile raf = randomAccessFile;
         try {
-            byte[] magic = new byte[Journal.MAGIC_SIZE];
-            if (raf.read(magic) == Journal.MAGIC_SIZE && Arrays.equals(magic, Journal.MAGIC_STRING)) {
+            byte[] magic = new byte[configuration.getMagicStringSize()];
+            if (raf.read(magic) == configuration.getMagicStringSize() && Arrays.equals(magic, configuration.getMagicStringBytes())) {
                 int version = raf.readInt();
-                if (version != Journal.STORAGE_VERSION) {
-                    throw new IllegalStateException("Incompatible storage version, found: " + version + ", required: " + Journal.STORAGE_VERSION);
+                if (version != configuration.getStorageVersion()) {
+                    throw new IllegalStateException("Incompatible storage version, found: " + version + ", required: " + configuration.getStorageVersion());
                 }
             } else {
                 throw new IOException("Incompatible magic string!");
@@ -73,7 +75,7 @@ public class RandomAccessFile implements FileAccessBase {
 
     @Override
     public boolean skipLocationData(Location location) throws IOException {
-        int toSkip = location.getSize() - Journal.RECORD_HEADER_SIZE;
+        int toSkip = location.getSize() - configuration.getRecordHeaderSize();
         if (size() - getCurrentPosition() >= toSkip) {
             skip(toSkip);
             return true;
@@ -101,11 +103,11 @@ public class RandomAccessFile implements FileAccessBase {
     @Override
     public byte[] readLocationData(Location location) throws IOException {
         if (location.isBatchControlRecord()) {
-            byte[] checksum = new byte[Journal.CHECKSUM_SIZE];
+            byte[] checksum = new byte[configuration.getChecksumSize()];
             randomAccessFile.read(checksum);
             return checksum;
         } else {
-            byte[] data = new byte[location.getSize() - Journal.RECORD_HEADER_SIZE];
+            byte[] data = new byte[location.getSize() - configuration.getRecordHeaderSize()];
             randomAccessFile.readFully(data);
             return data;
         }
@@ -117,8 +119,8 @@ public class RandomAccessFile implements FileAccessBase {
     }
 
     @Override
-    public HeaderRecord readHeader() throws IOException {
-        ByteBuffer headerBuffer = ByteBuffer.allocate(Journal.RECORD_HEADER_SIZE);
+    public HeaderRecord readRecordHeader() throws IOException {
+        ByteBuffer headerBuffer = ByteBuffer.allocate(configuration.getRecordHeaderSize());
         randomAccessFile.getChannel().read(headerBuffer);
         headerBuffer.flip();
 
@@ -131,7 +133,7 @@ public class RandomAccessFile implements FileAccessBase {
     @Override
     public boolean hasRecordHeader(long position, boolean isJournalOpened) throws IOException {
         long remaining = size() - position;
-        if (remaining >= Journal.RECORD_HEADER_SIZE) {
+        if (remaining >= configuration.getRecordHeaderSize()) {
             return true;
         } else if (remaining == 0) {
             return false;
@@ -163,7 +165,7 @@ public class RandomAccessFile implements FileAccessBase {
 
         // Write an empty batch control record.
         buffer.putInt(control.getLocation().getPointer());
-        buffer.putInt(Journal.BATCH_CONTROL_RECORD_SIZE);
+        buffer.putInt(configuration.getBatchControlRecordSize());
         buffer.put(Location.BATCH_CONTROL_RECORD_TYPE);
         buffer.putLong(0);
 
@@ -183,7 +185,7 @@ public class RandomAccessFile implements FileAccessBase {
         }
 
         // Now we can fill in the batch control record properly.
-        buffer.position(Journal.RECORD_HEADER_SIZE);
+        buffer.position(configuration.getRecordHeaderSize());
         if (checksum) {
             buffer.putLong(adler32.getValue());
         }

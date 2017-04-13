@@ -42,20 +42,6 @@ import static journal.io.util.LogHelper.warn;
  * @author Sergio Bossa
  */
 public class Journal {
-
-    public static final byte[] MAGIC_STRING = "J.IO".getBytes(Charset.forName("UTF-8"));
-    public static final int MAGIC_SIZE = MAGIC_STRING.length;
-    public static final int STORAGE_VERSION = 130;
-    public static final int STORAGE_VERSION_SIZE = 4;
-    public static final int FILE_HEADER_SIZE = MAGIC_SIZE + STORAGE_VERSION_SIZE;
-    //
-    public static final int RECORD_POINTER_SIZE = 4;
-    public static final int RECORD_LENGTH_SIZE = 4;
-    public static final int RECORD_TYPE_SIZE = 1;
-    public static final int RECORD_HEADER_SIZE = RECORD_POINTER_SIZE + RECORD_LENGTH_SIZE + RECORD_TYPE_SIZE;
-    //
-    public static final int CHECKSUM_SIZE = 8;
-    public static final int BATCH_CONTROL_RECORD_SIZE = RECORD_HEADER_SIZE + CHECKSUM_SIZE;
     //
     static final String WRITER_THREAD_GROUP = "Journal.IO - Writer Thread Group";
     static final String WRITER_THREAD = "Journal.IO - Writer Thread";

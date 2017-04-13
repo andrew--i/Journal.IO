@@ -17,7 +17,8 @@ import journal.io.api.DataFile;
 import journal.io.api.Journal;
 import journal.io.api.Location;
 import journal.io.api.WriteCallback;
-import journal.io.api.dao.FileAccessBase;
+import journal.io.api.dao.ConfigurationFactory;
+import journal.io.api.dao.FileAccess;
 import journal.io.api.exception.ClosedJournalException;
 
 import java.io.IOException;
@@ -53,7 +54,7 @@ public class DataFileAppender {
     //
     private volatile WriteBatch nextWriteBatch;
     private volatile DataFile lastAppendDataFile;
-    private volatile FileAccessBase lastAppendRaf;
+    private volatile FileAccess lastAppendRaf;
     private volatile Executor writer;
 
     public DataFileAppender(Journal journal) {
@@ -61,7 +62,7 @@ public class DataFileAppender {
     }
 
     public Location storeItem(byte[] data, byte type, boolean sync, WriteCallback callback) throws IOException {
-        int size = Journal.RECORD_HEADER_SIZE + data.length;
+        int size = ConfigurationFactory.CONFIGURATION().getRecordHeaderSize() + data.length;
 
         Location location = new Location();
         location.setSize(size);

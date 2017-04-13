@@ -7,11 +7,11 @@ import journal.io.api.operation.WriteCommand;
 import java.io.IOException;
 import java.util.Queue;
 
-public interface FileAccessBase {
+public interface FileAccess {
 
-    long writeHeader() throws IOException;
+    long writeFileHeader() throws IOException;
 
-    void verifyHeader() throws IOException;
+    void verifyFileHeader() throws IOException;
 
     void skip(int size) throws IOException;
 
@@ -31,7 +31,7 @@ public interface FileAccessBase {
 
     void seek(long position) throws IOException;
 
-    HeaderRecord readHeader() throws IOException;
+    HeaderRecord readRecordHeader() throws IOException;
 
     boolean hasRecordHeader(long position, boolean isJournalOpened) throws IOException;
 

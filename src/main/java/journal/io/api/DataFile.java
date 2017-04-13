@@ -13,7 +13,7 @@
  */
 package journal.io.api;
 
-import journal.io.api.dao.FileAccessBase;
+import journal.io.api.dao.FileAccess;
 import journal.io.api.dao.FileAccessFactory;
 
 import java.io.File;
@@ -71,19 +71,19 @@ public class DataFile implements Comparable<DataFile> {
 		this.length.addAndGet(size);
 	}
 
-	public FileAccessBase createDataAccess() throws IOException {
+	public FileAccess createDataAccess() throws IOException {
 		return new FileAccessFactory().create(file);
 	}
 
 	void writeHeader() throws IOException {
-		FileAccessBase dataAccess = createDataAccess();
-		length.set(dataAccess.writeHeader());
+		FileAccess dataAccess = createDataAccess();
+		length.set(dataAccess.writeFileHeader());
 
 	}
 
 	void verifyHeader() throws IOException {
-		FileAccessBase dataAccess = createDataAccess();
-		dataAccess.verifyHeader();
+		FileAccess dataAccess = createDataAccess();
+		dataAccess.verifyFileHeader();
 	}
 
 	@Override
